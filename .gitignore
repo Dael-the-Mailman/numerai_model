@@ -1,2 +1,4 @@
 submission.py
 data
+models/data
+*.csv
