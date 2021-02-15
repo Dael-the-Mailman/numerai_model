@@ -12,11 +12,11 @@ def score(df, pred_name="target", target_name="prediction"):
 def payout(scores):
     return scores.clip(lower=-0.25, upper=0.25)
 
-def read_csv(file_path, mem_constrained=False):
+def read_csv(file_path, reduce_mem=False):
     with open(file_path, 'r') as f:
         column_names = next(csv.reader(f))
     
-    if mem_constrained:
+    if reduce_mem:
         dtypes = {f"target": np.float16}
         to_uint8 = lambda x: np.uint8(float(x) * 4)
         converters = {x: to_uint8 for x in column_names if x.startswith('feature')}
