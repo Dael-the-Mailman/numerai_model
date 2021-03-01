@@ -1,39 +1,71 @@
-import os
 import pandas as pd
+import numpy as np
+import lightgbm as lgb
+import xgboost as xgb
+import catboost as cat
 
-from xgboost import XGBRegressor
-from utils import read_csv
-
-DIR = "E:/datasets/numerai_data/numerai_dataset_251"
+from sklearn.model_selection import train_test_split, TimeSeriesSplit
 
 print("Loading Data...")
-training_data = read_csv(os.path.join(DIR, "numerai_training_data.csv"), reduce_mem=True)
-tournament_data = read_csv(os.path.join(DIR, "numerai_tournament_data.csv"), reduce_mem=True)
-features = [f for f in tournament_data.columns if f.startswith("feature")]
+train_data = pd.read_parquet("https://numerai-public-datasets.s3-us-west-2.amazonaws.com/latest_numerai_training_data.parquet")
+tournament_data = pd.read_parquet("https://numerai-public-datasets.s3-us-west-2.amazonaws.com/latest_numerai_tournament_data.parquet")
 
+features = [f for f in train_data.columns if f.startswith("feature")]
 print(f"Loaded {len(features)} features")
 
-parameters = {
-    'max_depth': 6,
-    'learning_rate': 0.0455931325466394,
-    'n_estimators': 1880,
-    # 'gpu_id': 0,
-    # 'tree_method': 'gpu_hist',
-    # 'predictor': 'gpu_predictor',
-    'reg_alpha': 9.21300235811859,
-    'reg_lambda': 7.67094310505669,
-    'gamma': 1.25304737179889,
-    'colsample_bytree': 0.176873083338503,
-    'subsample': 0.326513157234183,
-    'min_child_weight': 1.06868133069853,
+folds = TimeSeriesSplit(n_splits=5)
+
+print("Training LightGBM Model")
+
+lgbm_parameters = {
+    "num_leaves": 247,
+    "min_child_weight": 0.04418018245999978,
+    "feature_fraction": 0.6236531816961323,
+    "bagging_fraction": 0.45905745759689537,
+    "min_data_in_leaf": 2329,
+    "objective": "regression",
+    "max_depth": -1,
+    "learning_rate": 0.005044370925360093,
+    "boosting_type": "gbdt",
+    "bagging_seed": 6,
+    "verbosity": -1,
+    "reg_alpha": 0.02650402149490516,
+    "reg_lambda": 0.2710359329222913,
+    "random_state": 0,
+    "n_jobs": 1, # PLEASE DON'T CRASH
 }
 
-model = XGBRegressor(**parameters)
+for fold_n, (train_index, valid_index) in enumerate(folds.split(train_data[features])):
+    train_fold = lgb.Dataset(train_data[features].iloc[train_index],
+                             train_data["target"].iloc[train_index])
+    valid_fold = lgb.Dataset(train_data[features].iloc[valid_index],
+                             train_data["target"].iloc[valid_index])
+    reg = lgb.train(lgbm_parameters, train_fold, 10000,
+                        valid_sets=[train_fold, valid_fold], verbose_eval=1000,
+                        early_stopping_rounds=500)
 
-print("Training Model...")
-model.fit(training_data[features], training_data["target"])
-# pickle.dump(model,open('xgbr.model', 'wb'))
+del train_data
+del train_fold
+del valid_fold
+del folds
+del fold_n
+del train_index
+del valid_index
 
 print("Generating predictions")
-tournament_data["prediction"] = model.predict(tournament_data[features])
-tournament_data[["id","prediction"]].to_csv("submission.csv", header=True, index=False)
+output = pd.DataFrame()
+try:
+#     output = tournament_data["id"]
+#     output["prediction"] = reg.predict(tournament_data[features]) # PLEASE DON'T CRASH
+#     output.to_csv("submission.csv", header=True, index=False)
+    batch_size = 32_768
+    for _, df in tournament_data.groupby(np.arange(len(tournament_data))//batch_size):
+        print(df.head())
+        result = pd.DataFrame()
+        result["id"] = df["id"]
+        result["prediction"] = reg.predict(df[features])
+        output = output.append(result)
+        del result
+except:
+    print("No more memory 😭")
+output.to_csv("submission.csv", header=True, index=False)
